@@ -1,0 +1,176 @@
+/*********************************************************************
+ * DF Pong Controller
+ * 
+ * This program implements a Bluetooth Low Energy controller for Pong.
+ * It sends movement data to a central device running in the browser and
+ * provides audio feedback through a buzzer.
+ *
+ * Game Link : https://digitalfuturesocadu.github.io/df-pong/
+ * 
+ * Movement Values:
+ * 0 = No movement / Neutral position
+ * 1 = UP movement (paddle moves up)
+ * 2 = DOWN movement (paddle moves down)
+ * 3 = Handshake signal (used for initial connection verification)
+ * 
+ * Key Functions:
+ * - handleInput(): Process the inputs to generate the states
+ * - sendMovement(): Sends movement data over BLE (0-3)
+ * - updateBLE(): Handles BLE connection management and updates
+ * - updateBuzzer(): Provides different buzzer patterns for different movements
+ * 
+ * Key Variables:
+ * - currentMovement: Stores current movement state (0-2)
+ * - deviceName : GIVE YOUR DEVICE AN APPROPRIATE NAME
+ * - LED_PIN : It is important to see the status of the arduino through the LED. 
+      if you can see the built-in add an external one and update the pin it is connected to
+ * 
+
+ *********************************************************************/
+
+
+
+#include <ArduinoBLE.h>
+#include "ble_functions.h"
+#include "buzzer_functions.h"
+//Since code is split over multiple files, we have to include them here
+
+
+//Name your controller!
+const char* deviceName = "C&C: DJ EXTERMINATOR";
+
+const int BUZZER_PIN = 11;
+const int LED_PIN = LED_BUILTIN;
+
+//analog values for the 2 light sensors
+int lightPin1 = A7;
+int lightPin2 = A6;
+const int lightAverageWindow = 10;
+const int equalityThreshold = 50;  // Adjust this value for sensitivity
+
+
+// Global variables
+int lightValue1 = 0;
+int lightValue2 = 0;
+int smoothedLight1 = 0;
+int smoothedLight2 = 0;
+unsigned long lastLightReadTime = 0;
+unsigned int lightReadInterval = 50;
+int currentMovement = 0;
+
+
+
+// Rolling average variables
+int lightReadings1[lightAverageWindow];
+int lightReadings2[lightAverageWindow];
+int lightReadIndex = 0;
+long lightTotalValue1 = 0;
+long lightTotalValue2 = 0;
+
+//external LED for feedback is initiated
+int LED1 = 10;
+
+void initializeLightAverage() {
+  for (int i = 0; i < lightAverageWindow; i++) {
+    lightReadings1[i] = 0;
+    lightReadings2[i] = 0;
+  }
+  lightTotalValue1 = 0;
+  lightTotalValue2 = 0;
+  lightReadIndex = 0;
+}
+
+void updateLightAverage(int newValue1, int newValue2) {
+  lightTotalValue1 = lightTotalValue1 - lightReadings1[lightReadIndex];
+  lightReadings1[lightReadIndex] = newValue1;
+  lightTotalValue1 = lightTotalValue1 + newValue1;
+
+  lightTotalValue2 = lightTotalValue2 - lightReadings2[lightReadIndex];
+  lightReadings2[lightReadIndex] = newValue2;
+  lightTotalValue2 = lightTotalValue2 + newValue2;
+
+  lightReadIndex = (lightReadIndex + 1) % lightAverageWindow;
+
+  smoothedLight1 = lightTotalValue1 / lightAverageWindow;
+  smoothedLight2 = lightTotalValue2 / lightAverageWindow;
+}
+
+void readLightSensors() {
+  unsigned long currentTime = millis();
+  if (currentTime - lastLightReadTime >= lightReadInterval) {
+    lightValue1 = analogRead(lightPin1);
+    lightValue2 = analogRead(lightPin2);
+
+    updateLightAverage(lightValue1, lightValue2);
+    printLightValues();
+
+    lastLightReadTime = currentTime;
+  }
+}
+
+void printLightValues() {
+  Serial.print("Sensor 1 Raw: ");
+  Serial.print(lightValue1);
+  Serial.print("\tSmoothed: ");
+  Serial.print(smoothedLight1);
+  Serial.print("\tSensor 2 Raw: ");
+  Serial.print(lightValue2);
+  Serial.print("\tSmoothed: ");
+  Serial.print(smoothedLight2);
+  Serial.print("\tDarker sensor: ");
+
+  int difference = abs(smoothedLight1 - smoothedLight2);
+
+  if (difference <= equalityThreshold) {
+    Serial.println("Equal (within threshold)");
+  } else if (smoothedLight1 < smoothedLight2) {
+    Serial.println("Sensor 1");
+  } else {
+    Serial.println("Sensor 2");
+  }
+}
+
+void setup() {
+  Serial.begin(9600);
+  pinMode(LED1, OUTPUT); // Defines output pin for feedback LED
+  Serial.println("Dual Light Sensor Comparison");
+  initializeLightAverage();
+
+  setupBLE(deviceName, LED_PIN);
+
+  setupBuzzer(BUZZER_PIN);
+}
+
+void loop() {
+
+// Update BLE connection status and handle incoming data
+updateBLE();
+
+//read the inputs te determine the current state
+//results in changing the value of currentMovement
+readLightSensors();
+handleInput();
+//send the movement state to P5
+sendMovement(currentMovement);
+
+//make the correct noise
+updateBuzzer(currentMovement);
+}
+
+void handleInput() {
+  //flipped read method because of INPUT_PULLUP
+  // int lightvalue1 = analogRead(BUTTON_UP_PIN);
+  // int lightvalue2 = analogRead(BUTTON_DOWN_PIN);
+
+//Threshold set based on lighting of the room
+  if (lightValue2 > 600) {
+    currentMovement = 1;  // UP movement
+    digitalWrite (LED1, HIGH); //LED feedback
+  } else if (lightValue1 > 600) {
+    currentMovement = 2;  // DOWN movement
+    digitalWrite (LED1, HIGH); //LED feedback
+  } else {
+    currentMovement = 0;  // No movement
+    digitalWrite (LED1, LOW); //No LED feedback
+  }
+}
